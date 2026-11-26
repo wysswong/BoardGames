@@ -1,0 +1,6 @@
+page {
+  background: #7a5a38;
+  background-image: radial-gradient(ellipse at 50% 0%, #93714b 0%, #60452b 100%);
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  color: #2c2c2a;
+}

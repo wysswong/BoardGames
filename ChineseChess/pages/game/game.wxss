@@ -1,0 +1,93 @@
+.game-page {
+  min-height: 100vh;
+  padding: 16px 16px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-sizing: border-box;
+}
+
+.status-bar {
+  width: 100%;
+  flex-shrink: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.status-text {
+  font-size: 14px;
+  color: #f5e0b5;
+}
+
+.status-text.check {
+  color: #ff9a6b;
+  font-weight: bold;
+}
+
+.status-text.facing {
+  color: #ffb45c;
+  font-weight: bold;
+}
+
+.status-text.self-check {
+  color: #ff7a6b;
+  font-weight: bold;
+}
+
+.status-text.notice {
+  color: #ffc85c;
+  font-weight: bold;
+}
+
+.status-text.win {
+  color: #ffd76a;
+  font-weight: bold;
+  font-size: 15px;
+}
+
+.status-text.draw {
+  color: #d8e4ec;
+  font-weight: bold;
+  font-size: 15px;
+}
+
+.move-count {
+  font-size: 12px;
+  color: rgba(245, 224, 181, 0.75);
+}
+
+.board-wrap {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.actions {
+  flex-shrink: 0;
+  display: flex;
+  gap: 16px;
+  margin-top: 32px;
+}
+
+.btn {
+  background: #7a5230;
+  color: #fff;
+}
+
+.btn.ghost {
+  background: transparent;
+  color: #f5e0b5;
+  border: 1px solid #f5e0b5;
+}
+
+.tip {
+  flex-shrink: 0;
+  margin-top: 14px;
+  font-size: 12px;
+  color: rgba(245, 224, 181, 0.75);
+}

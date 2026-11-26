@@ -1,0 +1,44 @@
+<view class="board-scaler" style="width:{{scaledWidth}}px;height:{{scaledHeight}}px">
+<view class="board" style="width:{{boardWidth}}px;height:{{boardHeight}}px;transform:scale({{scale}});transform-origin:0 0">
+  <view class="h-line" wx:for="{{hLines}}" wx:key="index" style="left:{{item.x}}px;top:{{item.y}}px;width:{{item.w}}px"></view>
+  <view class="v-line" wx:for="{{vLines}}" wx:key="index" style="left:{{item.x}}px;top:{{item.y}}px;height:{{item.h}}px"></view>
+  <view class="palace-line" wx:for="{{palaceLines}}" wx:key="index" style="left:{{item.x}}px;top:{{item.y}}px;width:{{item.w}}px;transform:translate(-50%,-50%) rotate({{item.deg}}deg)"></view>
+  <view class="river"><text class="river-word">楚 河</text><text class="river-word">漢 界</text></view>
+  <view class="point" wx:for="{{points}}" wx:key="index" data-index="{{item.index}}" bindtap="onPointTap" style="left:{{item.x}}px;top:{{item.y}}px">
+    <view wx:if="{{item.hint}}" class="hint-dot"></view>
+  </view>
+  <view class="pos-mark" wx:for="{{markers}}" wx:key="key" style="left:{{item.x}}px;top:{{item.y}}px">
+    <view class="corner tl"></view>
+    <view class="corner tr"></view>
+    <view class="corner bl"></view>
+    <view class="corner br"></view>
+  </view>
+  <view class="piece {{item.side}} {{item.selected ? 'selected' : ''}} {{item.lastMove ? 'last-move' : ''}} {{item.checked ? 'checked' : ''}} {{item.facing ? 'facing' : ''}} {{item.selfCheck ? 'self-check' : ''}} {{item.capturable ? 'capturable' : ''}} {{item.winner ? 'victory' : ''}} {{item.loser ? 'defeat' : ''}}" wx:for="{{pieces}}" wx:key="index" data-index="{{item.index}}" bindtap="onPointTap" style="left:{{item.x}}px;top:{{item.y}}px">{{item.text}}</view>
+  <view wx:if="{{moveFromPoint}}" class="move-mark-layer" data-index="{{moveFromPoint.index}}" bindtap="onPointTap" style="left:{{moveFromPoint.x}}px;top:{{moveFromPoint.y}}px">
+    <view class="move-from-mark"></view>
+  </view>
+  <view wx:if="{{moveToPoint}}" class="move-mark-layer" data-index="{{moveToPoint.index}}" bindtap="onPointTap" style="left:{{moveToPoint.x}}px;top:{{moveToPoint.y}}px">
+    <view class="move-to-ring"></view>
+  </view>
+  <view class="capture-fx" wx:for="{{captureFx}}" wx:key="seq" style="left:{{item.x}}px;top:{{item.y}}px">
+    <view wx:if="{{item.capturedText}}" class="captured-ghost {{item.capturedSide}}">{{item.capturedText}}</view>
+    <view wx:if="{{item.movedText}}" class="drop-ghost {{item.movedSide}}">{{item.movedText}}</view>
+    <view class="capture-ring"></view>
+    <view class="capture-flash"></view>
+  </view>
+  <view class="facing-fx" wx:for="{{facingFx}}" wx:key="key" style="left:{{item.x}}px;top:{{item.y}}px">
+    <view class="facing-ring"></view>
+  </view>
+  <view class="self-check-fx" wx:for="{{selfCheckFx}}" wx:key="key" style="left:{{item.x}}px;top:{{item.y}}px">
+    <view class="self-check-ring"></view>
+  </view>
+  <view wx:if="{{resultFx}}" class="result-layer" style="width:{{boardWidth}}px;height:{{boardHeight}}px">
+    <view class="result-banner {{resultFx.draw ? 'draw' : resultFx.winner}}">
+      <view class="result-crown">{{resultFx.draw ? '✧' : '✦'}}</view>
+      <view class="result-title">{{resultFx.draw ? '势均力敌' : (resultFx.winner === 'red' ? '红方胜' : '黑方胜')}}</view>
+      <view wx:if="{{resultFx.draw}}" class="result-draw-sub">握手言和</view>
+      <view wx:if="{{!resultFx.draw}}" class="result-ribbon"></view>
+    </view>
+  </view>
+</view>
+</view>

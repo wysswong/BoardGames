@@ -1,0 +1,6 @@
+{
+  "navigationBarTitleText": "对局",
+  "usingComponents": {
+    "chessboard": "/components/chessboard/index"
+  }
+}

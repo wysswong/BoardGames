@@ -1,0 +1,7 @@
+<view class="home">
+  <view class="brand">中国象棋</view>
+  <view class="tagline">好友对弈</view>
+  <button class="primary" bindtap="goLocal">本地双人对战</button>
+  <button class="secondary" disabled>好友在线对战 · 阶段 2</button>
+  <view class="note">当前版本先用本地热座验证规则引擎，在线房间随后接入。</view>
+</view>
