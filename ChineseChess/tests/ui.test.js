@@ -4,15 +4,22 @@ const path = require('path');
 const R = require('../utils/rules.js');
 
 let passed = 0;
+const testQueue = [];
 function test(name, fn) {
-  try {
-    fn();
-    passed++;
-    console.log('  PASS  ' + name);
-  } catch (err) {
-    console.error('  FAIL  ' + name + '\n        ' + err.message);
-    process.exit(1);
+  testQueue.push({ name, fn });
+}
+async function runTests() {
+  for (const item of testQueue) {
+    try {
+      await item.fn();
+      passed++;
+      console.log('  PASS  ' + item.name);
+    } catch (err) {
+      console.error('  FAIL  ' + item.name + '\n        ' + err.message);
+      process.exit(1);
+    }
   }
+  console.log('\n全部通过：' + passed + ' 项 UI 逻辑测试');
 }
 
 let componentDef;
@@ -939,4 +946,463 @@ test('炮位与兵卒位显示传统角标且不拦截点击', () => {
   assert.strictEqual(/\.pos-mark \.corner \{[\s\S]*?width:\s*6px/.test(wxss), true, '角标边长应缩小到 6px');
 });
 
-console.log('\n全部通过：' + passed + ' 项 UI 逻辑测试');
+// ---------- 在线模式（云调用 mock） ----------
+
+function onlinePageContext(options, roomState) {
+  const calls = [];
+  let watcher = null;
+  const originalCloud = global.wx.cloud;
+  global.wx.cloud = {
+    DYNANAMIC_CURRENT_ENV: 'x',
+    callFunction(opts) {
+      calls.push(opts.data);
+      const action = opts.data.action;
+      let result;
+      if (action === 'query') {
+        result = { ok: true, room: roomState, seat: roomState.seatForMe || 'red' };
+      } else if (action === 'move') {
+        result = { ok: true, effect: {} };
+      } else if (action === 'restart' || action === 'leave') {
+        result = { ok: true };
+      } else {
+        result = { ok: false, error: '未知' };
+      }
+      if (opts.success) opts.success({ result });
+    },
+    database() {
+      return {
+        collection() {
+          return {
+            doc() {
+              return {
+                watch(handlers) {
+                  watcher = handlers;
+                  return { close() { watcher = null; } };
+                }
+              };
+            }
+          };
+        }
+      };
+    }
+  };
+
+  const ctx = Object.assign({}, pageDef);
+  ctx.data = Object.assign({}, pageDef.data);
+  ctx.setData = function (patch, cb) {
+    Object.assign(this.data, patch);
+    if (typeof cb === 'function') cb();
+  };
+  ctx.highlightCalls = [];
+  ctx.selectComponent = () => ({ setHighlight(h) { ctx.highlightCalls.push(h); } });
+  ctx.calls = calls;
+  ctx.restoreCloud = () => { global.wx.cloud = originalCloud; };
+  ctx.emitRoom = room => { if (watcher) watcher.onChange({ docs: [room] }); };
+  ctx.emitError = err => { if (watcher && watcher.onError) watcher.onError(err); };
+  ctx.hasWatcher = () => !!watcher;
+  // onLoad 是异步的（await query），用微任务等待其完成
+  ctx.onLoad(Object.assign({ mode: 'online', roomId: 'room-1', code: '123456', seat: 'red' }, options));
+  return ctx;
+}
+
+function onlineRoom(overrides) {
+  return Object.assign({
+    _id: 'room-1',
+    code: '123456',
+    status: 'playing',
+    board: R.initialBoard(),
+    turn: 'red',
+    moveCount: 0,
+    winner: null,
+    loser: null,
+    overReason: '',
+    draw: false,
+    lastMove: null,
+    history: []
+  }, overrides || {});
+}
+
+test('在线模式：按参数进入并拉取房间状态，建立 watch', async () => {
+  const ctx = onlinePageContext({}, onlineRoom({ seatForMe: 'red' }));
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.strictEqual(ctx.data.mode, 'online');
+  assert.strictEqual(ctx.data.roomCode, '123456');
+  assert.strictEqual(ctx.data.seat, 'red');
+  assert.strictEqual(ctx.hasWatcher(), true, '应建立 watch 监听');
+  assert.strictEqual(ctx.calls[0].action, 'query');
+  assert.strictEqual(ctx.data.waiting, false);
+  ctx.restoreCloud();
+});
+
+test('在线模式：观战者不能落子', async () => {
+  const ctx = onlinePageContext({ seat: 'spectator' }, onlineRoom({ seatForMe: null }));
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.strictEqual(ctx.data.spectator, true);
+  toasts = [];
+  ctx.onBoardTap({ detail: { index: R.pos(9, 0) } });
+  assert.ok(toasts.some(t => /观战/.test(t)), '观战点击应提示不能落子');
+  assert.strictEqual(ctx.calls.filter(c => c.action === 'move').length, 0, '不应发送落子请求');
+  ctx.restoreCloud();
+});
+
+test('在线模式：非己方回合不能落子', async () => {
+  const ctx = onlinePageContext({ seat: 'red' }, onlineRoom({ turn: 'black', seatForMe: 'red' }));
+  await Promise.resolve();
+  await Promise.resolve();
+  toasts = [];
+  ctx.onBoardTap({ detail: { index: R.pos(9, 0) } });
+  assert.ok(toasts.some(t => /轮到你/.test(t)), '非回合应提示');
+  assert.strictEqual(ctx.calls.filter(c => c.action === 'move').length, 0);
+  ctx.restoreCloud();
+});
+
+test('在线模式：选子后落子走云函数，棋盘由 watch 回推', async () => {
+  const ctx = onlinePageContext({}, onlineRoom({ seatForMe: 'red' }));
+  await Promise.resolve();
+  await Promise.resolve();
+  ctx.onBoardTap({ detail: { index: R.pos(9, 0) } });
+  assert.strictEqual(ctx.data.selected, R.pos(9, 0));
+  assert.ok(ctx.data.hints.indexOf(R.pos(8, 0)) >= 0);
+  ctx.onBoardTap({ detail: { index: R.pos(8, 0) } });
+  await Promise.resolve();
+  const moveCalls = ctx.calls.filter(c => c.action === 'move');
+  assert.strictEqual(moveCalls.length, 1, '应只调用一次云函数落子');
+  assert.strictEqual(moveCalls[0].from, R.pos(9, 0));
+  assert.strictEqual(moveCalls[0].to, R.pos(8, 0));
+  // watch 推送新棋盘后页面更新
+  const moved = R.applyMove(R.initialBoard(), R.pos(9, 0), R.pos(8, 0));
+  ctx.emitRoom(onlineRoom({
+    seatForMe: 'red',
+    board: moved,
+    turn: 'black',
+    moveCount: 1,
+    lastMove: {
+      from: R.pos(9, 0), to: R.pos(8, 0), side: 'red', capture: false,
+      capturedPiece: null, checkedKing: -1, isCheck: false, statusText: '黑方走棋',
+      winner: null, loser: null, loserKing: -1, draw: false
+    }
+  }));
+  assert.strictEqual(ctx.data.board[R.pos(8, 0)], 'R');
+  assert.strictEqual(ctx.data.turn, 'black');
+  assert.ok(/黑方走棋/.test(ctx.data.statusText));
+  ctx.restoreCloud();
+});
+
+test('在线模式：等待加入与重新开局/离开房间', async () => {
+  const ctx = onlinePageContext({}, onlineRoom({ status: 'waiting', seatForMe: 'red' }));
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.strictEqual(ctx.data.waiting, true);
+  assert.ok(/等待好友/.test(ctx.data.onlineStatus));
+  toasts = [];
+  ctx.onBoardTap({ detail: { index: R.pos(9, 0) } });
+  assert.ok(toasts.some(t => /等待/.test(t)));
+
+  ctx.emitRoom(onlineRoom({ seatForMe: 'red', status: 'finished', winner: 'red', loser: 'black', overReason: '将死' }));
+  assert.strictEqual(ctx.data.over, true);
+  assert.strictEqual(ctx.data.winner, 'red');
+  await ctx.onRestart();
+  await Promise.resolve();
+  assert.ok(ctx.calls.some(c => c.action === 'restart'));
+  ctx.restoreCloud();
+});
+
+test('在线模式：watch 权限错误暴露真实原因并给出权限提示', async () => {
+  const ctx = onlinePageContext({}, onlineRoom({ seatForMe: 'red' }));
+  await Promise.resolve();
+  await Promise.resolve();
+  // 错误解析：区分权限与网络
+  const perm = ctx._watchErrorInfo({ message: 'database permission denied' });
+  assert.strictEqual(perm.isPermission, true);
+  assert.ok(/rooms 集合权限/.test(perm.hint));
+  const net = ctx._watchErrorInfo({ message: 'network timeout' });
+  assert.strictEqual(net.isPermission, false);
+  assert.ok(/网络/.test(net.hint));
+
+  // 连续 4 次错误：前 3 次重连，第 4 次暴露真实错误 + 权限提示。
+  // 每次错误后 _onWatchError 会关闭 watcher，真实由 timer 重建；测试里手动重建模拟。
+  ctx.emitError({ message: 'database permission denied' });
+  assert.ok(/重连 1\/3/.test(ctx.data.onlineStatus), '首次错误应提示重连');
+  ctx._openWatcher();
+  ctx.emitError({ message: 'database permission denied' });
+  assert.ok(/重连 2\/3/.test(ctx.data.onlineStatus));
+  ctx._openWatcher();
+  ctx.emitError({ message: 'database permission denied' });
+  assert.ok(/重连 3\/3/.test(ctx.data.onlineStatus));
+  ctx._openWatcher();
+  ctx.emitError({ message: 'database permission denied' });
+  assert.ok(/连接中断/.test(ctx.data.onlineStatus));
+  assert.ok(/permission denied/.test(ctx.data.onlineStatus), '应暴露真实错误原因');
+  assert.ok(/所有用户可读/.test(ctx.data.onlineStatus), '应给出权限修复提示');
+  // 清理重连 timer，避免测试进程挂起
+  ctx._closeWatcher();
+  ctx.restoreCloud();
+});
+
+test('棋盘翻转：黑方视角行列反转但索引与文字不变', () => {
+  const ctx = componentContext();
+  ctx.data.flip = true;
+  ctx.observe(R.initialBoard(), -1, [], null);
+  // 黑方将初始在 index=pos(0,4)，翻转后应显示在底部；红帅 pos(9,4) 应在顶部
+  const blackKing = ctx.data.pieces.find(p => p.text === '將');
+  const redKing = ctx.data.pieces.find(p => p.text === '帥');
+  assert.strictEqual(blackKing.index, R.pos(0, 4), '索引仍是真实棋位');
+  assert.ok(blackKing.y > redKing.y, '翻转后黑将应在红帅下方');
+  assert.strictEqual(blackKing.y, 24 + 9 * 39, '黑将应在最底行');
+  assert.strictEqual(redKing.y, 24, '红帅应在最顶行');
+  // 文字保持正向（不是倒转的）
+  assert.strictEqual(blackKing.text, '將');
+  // 交点同样反转：index 0 (row0,col0) 应落在右下，index 89 落在左上
+  const p0 = ctx.data.points[0];
+  const p89 = ctx.data.points[89];
+  assert.ok(p0.x > p89.x && p0.y > p89.y, '交点应整体旋转 180°');
+  // 点击仍按真实索引发出
+  let event;
+  ctx.triggerEvent = (name, detail) => { event = { name, detail }; };
+  ctx.tap(R.pos(0, 4));
+  assert.strictEqual(event.detail.index, R.pos(0, 4), '翻转不改变点击索引');
+});
+
+test('在线模式：执黑翻转棋盘、执红与观战不翻转', async () => {
+  const black = onlinePageContext({ seat: 'black' }, onlineRoom({ seatForMe: 'black' }));
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.strictEqual(black.data.flip, true, '执黑应翻转棋盘');
+
+  const red = onlinePageContext({ seat: 'red' }, onlineRoom({ seatForMe: 'red' }));
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.strictEqual(red.data.flip, false, '执红不翻转');
+
+  const spec = onlinePageContext({ seat: 'spectator' }, onlineRoom({ seatForMe: null }));
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.strictEqual(spec.data.flip, false, '观战保持红方视角');
+  [black, red, spec].forEach(c => { c._closeWatcher(); c.restoreCloud(); });
+});
+
+test('在线模式：watch 推送恢复后重置重试计数', async () => {
+  const ctx = onlinePageContext({}, onlineRoom({ seatForMe: 'red' }));
+  await Promise.resolve();
+  await Promise.resolve();
+  ctx.emitError({ message: 'network timeout' });
+  assert.strictEqual(ctx._watchRetry, 1);
+  ctx._openWatcher();
+  ctx.emitRoom(onlineRoom({ seatForMe: 'red' }));
+  assert.strictEqual(ctx._watchRetry, 0, '收到推送后应清零重试计数');
+  ctx._closeWatcher();
+  ctx.restoreCloud();
+});
+
+test('在线模式：点击送将落点触发将军特效且不提交落子', async () => {
+  const board = Array(90).fill(null);
+  board[R.pos(0, 4)] = 'k';   // 黑将
+  board[R.pos(9, 4)] = 'K';   // 红帅
+  board[R.pos(3, 1)] = 'c';   // 黑炮
+  board[R.pos(6, 4)] = 'C';   // 红炮，黑炮横走到(3,4)后自己成了炮架
+  const ctx = onlinePageContext({ seat: 'black' }, onlineRoom({
+    board, turn: 'black', seatForMe: 'black'
+  }));
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.strictEqual(ctx.data.flip, true);
+
+  // 选中黑炮，送将落点走法可达但不在合法提示里
+  ctx.onBoardTap({ detail: { index: R.pos(3, 1) } });
+  assert.strictEqual(R.pseudoMoves(board, R.pos(3, 1)).indexOf(R.pos(3, 4)) >= 0, true);
+  assert.strictEqual(ctx.data.hints.indexOf(R.pos(3, 4)), -1);
+
+  // 点击送将落点：应触发特效而非落子
+  ctx.onBoardTap({ detail: { index: R.pos(3, 4) } });
+  assert.strictEqual(ctx.data.isSelfCheck, true);
+  assert.strictEqual(ctx.data.selfCheckSeq, 1);
+  assert.strictEqual(ctx.data.statusText, '送将！己方将被攻击，此步非法');
+  assert.strictEqual(ctx.calls.filter(c => c.action === 'move').length, 0, '非法着法不得提交云函数');
+  const calls = ctx.highlightCalls.filter(Boolean);
+  const last = calls[calls.length - 1];
+  assert.strictEqual(last.selfCheckKing, R.pos(0, 4), '应标记己方黑将');
+  assert.strictEqual(last.selfCheckSeq, 1);
+
+  // 再点一次序号递增以便动画重播
+  ctx.onBoardTap({ detail: { index: R.pos(3, 4) } });
+  assert.strictEqual(ctx.data.selfCheckSeq, 2);
+  ctx._closeWatcher();
+  ctx.restoreCloud();
+});
+
+test('在线模式：对手离开推送后显示胜负结算并提示', async () => {
+  const board = R.initialBoard();
+  const ctx = onlinePageContext({ seat: 'red' }, onlineRoom({
+    board, turn: 'red', seatForMe: 'red', moveCount: 3
+  }));
+  await Promise.resolve();
+  await Promise.resolve();
+  toasts = [];
+  ctx._lastMoveKey = '3:80-77'; // 上一次真实走子的 key
+
+  const leaveRoomState = onlineRoom({
+    board,
+    turn: 'red',
+    seatForMe: 'red',
+    moveCount: 3,
+    status: 'finished',
+    winner: 'red',
+    loser: 'black',
+    loserKing: R.findKing(board, 'black'),
+    overReason: '对手离开',
+    lastMove: {
+      from: -1, to: -1, side: 'black', checkedKing: -1,
+      capture: false, capturedPiece: null, isCheck: false,
+      winner: 'red', loser: 'black', loserKing: R.findKing(board, 'black'),
+      draw: false, statusText: '对手离开，红方胜 · 黑方败', notice: '', reason: 'leave'
+    }
+  });
+  ctx.emitRoom(leaveRoomState);
+
+  assert.strictEqual(ctx.data.over, true);
+  assert.strictEqual(ctx.data.winner, 'red');
+  assert.strictEqual(ctx.data.loser, 'black');
+  assert.ok(/对手离开/.test(ctx.data.statusText) && /红方胜/.test(ctx.data.statusText));
+  assert.ok(toasts.some(t => /红方胜/.test(t)), '应弹出一次结算提示');
+  // 结算特效由 lastMove 驱动传给棋盘
+  const fx = ctx.highlightCalls.filter(Boolean).pop();
+  assert.strictEqual(fx.winner, 'red');
+  assert.strictEqual(fx.loser, 'black');
+  assert.strictEqual(fx.loserKing, R.findKing(board, 'black'));
+  assert.strictEqual(fx.reason, 'leave');
+  ctx._closeWatcher();
+  ctx.restoreCloud();
+});
+
+test('在线模式：等待阶段房主离开解散房间，不判胜负', async () => {
+  const ctx = onlinePageContext({}, onlineRoom({ status: 'waiting', seatForMe: 'red' }));
+  await Promise.resolve();
+  await Promise.resolve();
+  toasts = [];
+
+  ctx.emitRoom(onlineRoom({
+    status: 'finished', seatForMe: 'red', winner: null, loser: null,
+    overReason: '房间解散',
+    lastMove: {
+      from: -1, to: -1, side: 'red', checkedKing: -1,
+      capture: false, capturedPiece: null, isCheck: false,
+      winner: null, loser: null, loserKing: -1, draw: false,
+      statusText: '房主离开，房间解散', notice: '', reason: 'leave'
+    }
+  }));
+
+  assert.strictEqual(ctx.data.over, true);
+  assert.strictEqual(ctx.data.winner, null, '不得误判任何一侧获胜');
+  assert.strictEqual(ctx.data.loser, null);
+  assert.ok(/房间解散/.test(ctx.data.statusText));
+  ctx._closeWatcher();
+  ctx.restoreCloud();
+});
+
+test('在线模式：点击照面落点触发照面特效且不提交落子', async () => {
+  const board = Array(90).fill(null);
+  board[R.pos(0, 4)] = 'k';   // 黑将
+  board[R.pos(9, 4)] = 'K';   // 红帅
+  board[R.pos(5, 4)] = 'R';   // 红车挡在中间，是唯一遮挡
+  const ctx = onlinePageContext({}, onlineRoom({ board, turn: 'red', seatForMe: 'red' }));
+  await Promise.resolve();
+  await Promise.resolve();
+
+  ctx.onBoardTap({ detail: { index: R.pos(5, 4) } });
+  assert.strictEqual(ctx.data.selected, R.pos(5, 4));
+  assert.strictEqual(ctx.data.hints.indexOf(R.pos(5, 3)), -1);
+
+  ctx.onBoardTap({ detail: { index: R.pos(5, 3) } });
+  assert.strictEqual(ctx.data.isFacing, true);
+  assert.strictEqual(ctx.data.facingSeq, 1);
+  assert.strictEqual(ctx.data.statusText, '将帅不能照面，此步非法');
+  assert.strictEqual(ctx.calls.filter(c => c.action === 'move').length, 0, '非法着法不得提交云函数');
+  const calls = ctx.highlightCalls.filter(Boolean);
+  const last = calls[calls.length - 1];
+  assert.deepStrictEqual(last.facingKings, [R.pos(9, 4), R.pos(0, 4)]);
+  assert.strictEqual(last.facingSeq, 1);
+  ctx._closeWatcher();
+  ctx.restoreCloud();
+});
+
+test('在线模式：连续吃子特效序号递增，动画可重播', async () => {
+  const board = R.initialBoard();
+  const ctx = onlinePageContext({}, onlineRoom({ seatForMe: 'red' }));
+  await Promise.resolve();
+  await Promise.resolve();
+
+  const captureRoom = (moveCount, from, to) => onlineRoom({
+    board, moveCount, seatForMe: 'red',
+    lastMove: {
+      from, to, side: 'red', checkedKing: -1,
+      capture: true, capturedPiece: 'p', isCheck: false,
+      winner: null, loser: null, loserKing: -1, draw: false,
+      statusText: '黑方走棋'
+    }
+  });
+
+  // 云函数写入的 lastMove 没有 captureSeq，页面必须补递增序号
+  ctx.emitRoom(captureRoom(1, R.pos(9, 0), R.pos(2, 0)));
+  ctx.emitRoom(captureRoom(2, R.pos(9, 8), R.pos(2, 8)));
+
+  const seqs = ctx.highlightCalls.filter(Boolean).map(h => h.captureSeq);
+  assert.deepStrictEqual(seqs, [1, 2], '连续吃子序号必须递增，否则 wx:key 不变动画不重播');
+  assert.strictEqual(ctx.data.captureSeq, 2);
+  ctx._closeWatcher();
+  ctx.restoreCloud();
+});
+
+test('在线模式：吃子与普通走子交替时序号正确递增', async () => {
+  const board = R.initialBoard();
+  const ctx = onlinePageContext({}, onlineRoom({ seatForMe: 'red' }));
+  await Promise.resolve();
+  await Promise.resolve();
+
+  const mk = (moveCount, capture) => onlineRoom({
+    board, moveCount, seatForMe: 'red',
+    lastMove: {
+      from: R.pos(9, 0), to: R.pos(8, 0), side: 'red', checkedKing: -1,
+      capture, capturedPiece: capture ? 'p' : null, isCheck: false,
+      winner: null, loser: null, loserKing: -1, draw: false, statusText: '黑方走棋'
+    }
+  });
+
+  ctx.emitRoom(mk(1, true));   // 吃子 → 序号 1
+  ctx.emitRoom(mk(2, false));  // 普通走子 → 序号保持 1
+  ctx.emitRoom(mk(3, true));   // 再吃子 → 序号 2
+
+  const calls = ctx.highlightCalls.filter(Boolean);
+  assert.deepStrictEqual(calls.map(h => h.captureSeq), [1, 1, 2]);
+  assert.deepStrictEqual(calls.map(h => h.capture), [true, false, true]);
+  assert.strictEqual(ctx.data.captureSeq, 2, '普通走子不应消耗吃子序号');
+  ctx._closeWatcher();
+  ctx.restoreCloud();
+});
+
+test('在线模式：重复推送同一着法不递增序号、不重播特效', async () => {
+  const board = R.initialBoard();
+  const ctx = onlinePageContext({}, onlineRoom({ seatForMe: 'red' }));
+  await Promise.resolve();
+  await Promise.resolve();
+
+  const room = onlineRoom({
+    board, moveCount: 1, seatForMe: 'red',
+    lastMove: {
+      from: R.pos(9, 0), to: R.pos(2, 0), side: 'red', checkedKing: -1,
+      capture: true, capturedPiece: 'p', isCheck: false,
+      winner: null, loser: null, loserKing: -1, draw: false, statusText: '黑方走棋'
+    }
+  });
+
+  ctx.emitRoom(room);
+  ctx.emitRoom(Object.assign({}, room)); // watch 重连导致的重复推送
+  const seqs = ctx.highlightCalls.filter(Boolean).map(h => h.captureSeq);
+  assert.deepStrictEqual(seqs, [1, 1], '重复推送不得递增序号，否则特效会莫名重播');
+  assert.strictEqual(ctx.data.captureSeq, 1);
+  ctx._closeWatcher();
+  ctx.restoreCloud();
+});
+
+runTests().catch(() => process.exit(1));

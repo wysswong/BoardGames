@@ -1,0 +1,9 @@
+{
+  "name": "room",
+  "version": "1.0.0",
+  "description": "中国象棋房间云函数：建房/加入/走子/重开/查询",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3"
+  }
+}

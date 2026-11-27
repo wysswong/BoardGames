@@ -1,6 +1,7 @@
 {
   "pages": [
     "pages/index/index",
+    "pages/online/online",
     "pages/game/game"
   ],
   "window": {

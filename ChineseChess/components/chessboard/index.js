@@ -18,7 +18,9 @@ Component({
     board: { type: Array, value: [], observer: 'onPropChange' },
     selected: { type: Number, value: -1, observer: 'onPropChange' },
     hints: { type: Array, value: [], observer: 'onPropChange' },
-    lastMove: { type: Object, value: null, observer: 'onPropChange' }
+    lastMove: { type: Object, value: null, observer: 'onPropChange' },
+    // 黑方视角：棋盘旋转 180°（坐标做行列反转），但棋子文字保持正向、点击索引不变
+    flip: { type: Boolean, value: false, observer: 'onPropChange' }
   },
 
   data: {
@@ -105,6 +107,10 @@ Component({
 
     render() {
       const { board, selected, hints } = this.data;
+      // 黑方视角：把行、列坐标按棋盘中心翻转，索引本身不变（点击仍用真实 index）
+      const flip = !!this.data.flip;
+      const fx = col => PAD + (flip ? (R.COLS - 1 - col) : col) * CELL;
+      const fy = row => PAD + (flip ? (R.ROWS - 1 - row) : row) * CELL;
       const selectedSide = selected >= 0 && board[selected] ? R.sideOf(board[selected]) : null;
       // 优先用页面直接设置的高亮；兼容通过属性传入的 lastMove
       const highlight = this.data._highlight || this.data.lastMove;
@@ -133,13 +139,13 @@ Component({
       // 独立的高亮坐标层：放在棋子之后渲染，避免被棋子/交点覆盖
       const moveFromPoint = from >= 0 ? {
         index: from,
-        x: PAD + R.colOf(from) * CELL,
-        y: PAD + R.rowOf(from) * CELL
+        x: fx(R.colOf(from)),
+        y: fy(R.rowOf(from))
       } : null;
       const moveToPoint = to >= 0 ? {
         index: to,
-        x: PAD + R.colOf(to) * CELL,
-        y: PAD + R.rowOf(to) * CELL
+        x: fx(R.colOf(to)),
+        y: fy(R.rowOf(to))
       } : null;
 
       // 吃子特效：captureSeq 递增作为 wx:key，确保连续吃子时动画重新播放
@@ -159,15 +165,15 @@ Component({
       // 照面警示：将帅两子都打标记，序号用于重播动画
       const facingFx = facingKings.map((idx, i) => ({
         key: facingSeq + '-' + i,
-        x: PAD + R.colOf(idx) * CELL,
-        y: PAD + R.rowOf(idx) * CELL
+        x: fx(R.colOf(idx)),
+        y: fy(R.rowOf(idx))
       }));
 
       // 送将警示：己方将帅打红色脉冲 + 一次性扩散环，序号保证连续触发可重播
       const selfCheckFx = selfCheckKing >= 0 ? [{
         key: 'sc-' + selfCheckSeq,
-        x: PAD + R.colOf(selfCheckKing) * CELL,
-        y: PAD + R.rowOf(selfCheckKing) * CELL
+        x: fx(R.colOf(selfCheckKing)),
+        y: fy(R.rowOf(selfCheckKing))
       }] : [];
 
       // 结算：分出胜负时标记胜方/败方；和棋只显示中性横幅，不给任何棋子打胜负标记
@@ -183,8 +189,8 @@ Component({
           const isHint = hints.indexOf(index) >= 0;
           points.push({
             index,
-            x: PAD + col * CELL,
-            y: PAD + row * CELL,
+            x: fx(col),
+            y: fy(row),
             hint: isHint && !board[index]
           });
         }
@@ -198,8 +204,8 @@ Component({
       markRows.forEach(pair => {
         markers.push({
           key: pair[0] + '-' + pair[1],
-          x: PAD + pair[1] * CELL,
-          y: PAD + pair[0] * CELL
+          x: fx(pair[1]),
+          y: fy(pair[0])
         });
       });
 
@@ -210,8 +216,8 @@ Component({
         const side = R.sideOf(piece);
         pieces.push({
           index: i,
-          x: PAD + R.colOf(i) * CELL,
-          y: PAD + R.rowOf(i) * CELL,
+          x: fx(R.colOf(i)),
+          y: fy(R.rowOf(i)),
           text: TEXT[side][R.typeOf(piece)],
           side,
           selected: i === selected,

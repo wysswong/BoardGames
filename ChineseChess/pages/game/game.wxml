@@ -1,15 +1,20 @@
 <view class="game-page">
+  <view wx:if="{{mode === 'online'}}" class="online-bar">
+    <text class="online-status">{{onlineStatus}}</text>
+    <text wx:if="{{roomCode}}" class="room-code" bindtap="onCopyCode">房间号 {{roomCode}} · 复制</text>
+  </view>
   <view class="status-bar">
     <text class="status-text {{isCheck && !over ? 'check' : ''}} {{isFacing ? 'facing' : ''}} {{isSelfCheck ? 'self-check' : ''}} {{notice ? 'notice' : ''}} {{over && winner ? 'win' : ''}} {{over && !winner ? 'draw' : ''}}">{{over ? (winner ? '✦ ' : '✧ ') : (isCheck || isFacing || isSelfCheck || notice ? '⚠ ' : '')}}{{statusText}}</text>
     <text class="move-count">第 {{moveCount}} 手</text>
   </view>
   <view class="board-wrap">
-    <chessboard id="chessboard" board="{{board}}" selected="{{selected}}" hints="{{hints}}" last-move="{{lastMove}}" bind:pointtap="onBoardTap" />
+    <chessboard id="chessboard" board="{{board}}" selected="{{selected}}" hints="{{hints}}" last-move="{{lastMove}}" flip="{{flip}}" bind:pointtap="onBoardTap" />
   </view>
   <view class="actions">
-    <button class="btn" size="mini" bindtap="onRestart">重新开始</button>
-    <button class="btn ghost" size="mini" bindtap="onToggleBgm">{{bgmOn ? '关音乐' : '开音乐'}}</button>
-    <button class="btn ghost" size="mini" bindtap="onBack">返回</button>
+    <button wx:if="{{!spectator}}" class="btn primary" bindtap="onRestart">{{mode === 'online' ? '重新开局' : '重新开始'}}</button>
+    <button class="btn" bindtap="onToggleBgm">{{bgmOn ? '关音乐' : '开音乐'}}</button>
+    <button wx:if="{{mode === 'online' && !spectator}}" class="btn" bindtap="onLeave">离开房间</button>
+    <button class="btn" bindtap="onBack">返回</button>
   </view>
-  <view class="tip">红方先行 · 本地双人对战</view>
+  <view class="tip">{{mode === 'online' ? (spectator ? '观战模式 · 只读' : (flip ? '执黑 · 己方在下方' : '执红 · 己方在下方')) : '红方先行 · 本地双人对战'}}</view>
 </view>
